@@ -12,6 +12,9 @@
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
 
     <!-- CSS/JS: solo CDN (Tailwind, Leaflet, fuentes). Imágenes del logo: rutas locales opcionales. -->
     <script id="tailwind-config">
@@ -97,6 +100,7 @@
         }
 
         @media (max-width: 768px) {
+
             /* Zoom en topright (initMap); evitar solaparse con la TopBar */
             .leaflet-top.leaflet-right {
                 top: 120px !important;
@@ -161,6 +165,12 @@
                 <input id="piloto-email" type="email" placeholder="tu-email@ejemplo.com"
                     class="w-full h-14 pl-14 pr-6 bg-surface-container-lowest border-none rounded-full ring-1 ring-outline-variant/20 focus:ring-2 focus:ring-primary transition-all shadow-sm font-medium text-on-surface">
             </div>
+            <div class="relative">
+                <span
+                    class="absolute left-5 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline">call</span>
+                <input id="piloto-celular" type="tel" placeholder="Número de celular (ej: 351...)"
+                    class="w-full h-14 pl-14 pr-6 bg-surface-container-lowest border-none rounded-full ring-1 ring-outline-variant/20 focus:ring-2 focus:ring-primary transition-all shadow-sm font-medium text-on-surface">
+            </div>
             <button id="btn-empezar" disabled
                 class="w-full h-14 bg-primary text-white font-bold rounded-full shadow-lg shadow-primary/20 disabled:opacity-50 disabled:active:scale-100 active:scale-95 transition-all text-base">
                 Empezar
@@ -217,8 +227,7 @@
                     onclick="closeSheet()"></div>
 
                 <!-- Contenido scrolleable (el footer queda siempre visible) -->
-                <div id="sheet-summary"
-                    class="px-8 pb-4 flex-1 min-h-0 overflow-y-auto overscroll-y-contain">
+                <div id="sheet-summary" class="px-8 pb-4 flex-1 min-h-0 overflow-y-auto overscroll-y-contain">
                     <!-- se rellena por JS -->
                 </div>
 
@@ -443,15 +452,27 @@
         }
 
         const savedEmail = (localStorage.getItem('vistaguay_piloto_email') || '').trim();
-        if (savedEmail && savedEmail.includes('@')) {
+        const savedPhone = (localStorage.getItem('vistaguay_piloto_celular') || '').trim();
+        const telefonoInput = document.getElementById('piloto-celular');
+
+        // Función para validar que ambos campos estén OK
+        function validarFormulario() {
+            const hasEmail = emailInput.value.includes('@');
+            const hasPhone = telefonoInput.value.trim().length >= 8; // Mínimo 8 números para un celular válido
+            btnEmpezar.disabled = !(hasEmail && hasPhone);
+        }
+
+        if (savedEmail && savedEmail.includes('@') && savedPhone.length >= 8) {
             emailInput.value = savedEmail;
+            telefonoInput.value = savedPhone;
             btnEmpezar.disabled = false;
             modal.classList.add('hidden');
             mainAppEl.classList.remove('hidden');
             cargarVuelosDesdeServidor(savedEmail, { silent: true });
         } else {
             emailInput.value = savedEmail || '';
-            btnEmpezar.disabled = !emailInput.value.includes('@');
+            telefonoInput.value = savedPhone || '';
+            validarFormulario();
         }
 
         btnCancelarLogin.addEventListener('click', () => {
@@ -459,25 +480,28 @@
             if (abortController) abortController.abort();
 
             localStorage.removeItem('vistaguay_piloto_email');
+            localStorage.removeItem('vistaguay_piloto_celular');
             emailInput.value = '';
+            telefonoInput.value = '';
 
             btnEmpezar.disabled = true;
             btnEmpezar.classList.remove('loading-wave-effect');
             btnEmpezar.textContent = 'Empezar';
-
             btnCancelarLogin.classList.add('hidden');
         });
 
-        emailInput.addEventListener('input', () => {
-            btnEmpezar.disabled = !emailInput.value.includes('@');
-        });
+        emailInput.addEventListener('input', validarFormulario);
+        telefonoInput.addEventListener('input', validarFormulario);
 
         btnEmpezar.addEventListener('click', async () => {
             let email = emailInput.value.trim();
-            if (!email) {
-                email = (localStorage.getItem('vistaguay_piloto_email') || '').trim();
-            }
-            if (!email || !email.includes('@')) return;
+            let phone = telefonoInput.value.trim();
+
+            if (!email || !email.includes('@') || phone.length < 8) return;
+
+            // Guardamos el celular en el navegador
+            localStorage.setItem('vistaguay_piloto_celular', phone);
+
             await cargarVuelosDesdeServidor(email, { silent: false });
         });
 
@@ -496,12 +520,22 @@
 
                 L.control.zoom({ position: 'topright' }).addTo(map);
 
-                markersLayerGroup = L.layerGroup().addTo(map);
+                markersLayerGroup = L.markerClusterGroup({
+                    maxClusterRadius: 40,
+                    iconCreateFunction: function (cluster) {
+                        return L.divIcon({
+                            html: `<div class="bg-primary text-white font-bold rounded-full w-8 h-8 flex items-center justify-center border-2 border-white shadow-lg">${cluster.getChildCount()}</div>`,
+                            className: 'custom-cluster-icon',
+                            iconSize: L.point(32, 32)
+                        });
+                    }
+                }).addTo(map);
+
                 map.on('click', closeSheet);
             } else if (markersLayerGroup) {
                 markersLayerGroup.clearLayers();
             } else {
-                markersLayerGroup = L.layerGroup().addTo(map);
+                markersLayerGroup = L.markerClusterGroup().addTo(map);
             }
 
             map.invalidateSize();
@@ -509,8 +543,20 @@
             const bounds = L.latLngBounds();
             let hasMarkers = false;
 
+            // --- MAGIA ANTI-DUPLICADOS ---
+            // Limpiamos los datos que manda n8n para dibujar cada ID una sola vez
+            const vuelosUnicos = [];
+            const idsVistos = new Set();
+
             solicitudes.forEach(sol => {
-                // Ignoramos filas vacías sin ID
+                if (sol.ID && !idsVistos.has(sol.ID)) {
+                    idsVistos.add(sol.ID);
+                    vuelosUnicos.push(sol);
+                }
+            });
+
+            vuelosUnicos.forEach(sol => {
+                // Ignoramos filas vacías sin ID o sin Coordenadas
                 if (!sol.ID || !sol.Coordenadas) return;
 
                 const isPulverizacion = sol["Tipo de Pulverización"] ? true : false;
@@ -550,6 +596,18 @@
 
             if (hasMarkers) {
                 map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+            }
+
+            // Geolocalización: Centrar en la ubicación del piloto
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    // Centrar con un zoom de 8 (aprox 100km de vista)
+                    map.flyTo([lat, lng], 8, { duration: 1.5 });
+                }, (error) => {
+                    console.warn("Ubicación denegada o no disponible:", error);
+                }, { timeout: 5000 });
             }
         }
 
@@ -966,6 +1024,7 @@
                 id_solicitud_vuelo: currentRequest.ID,
                 fecha_postulacion: new Date().toISOString(),
                 email_piloto: localStorage.getItem('vistaguay_piloto_email'),
+                celular: localStorage.getItem('vistaguay_piloto_celular'), // <-- Aca mandamos el celu a n8n
                 cotizacion_por_hectarea: precio,
                 cotizacion_total: (precio * currentRequest.Hectareas).toFixed(2),
                 Piloto_Asignado: "No",
@@ -1095,8 +1154,8 @@
                 Contactanos
             </a>
             <button onclick="closeSuccessModal()"
-                class="text-sm font-bold text-on-surface-variant/60 hover:text-on-surface transition-colors">
-                Cerrar ventana
+                class="w-full h-14 border-2 border-outline-variant/30 text-secondary font-bold rounded-full flex items-center justify-center active:scale-95 transition-all">
+                Postularte a otros vuelos
             </button>
         </div>
     </div>
